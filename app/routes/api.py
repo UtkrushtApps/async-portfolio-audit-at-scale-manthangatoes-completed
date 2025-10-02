@@ -4,23 +4,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.models import Portfolio, Trade, MarketData, AuditLog
 from app.schemas.schemas import TradeSummary, TradeOut, AuditLogOut, PortfolioSummary
-from sqlalchemy import func
+from sqlalchemy import func, distinct
 import datetime
 router = APIRouter()
 
+from sqlalchemy import func, distinct
+
 @router.get("/portfolio/{portfolio_id}/summary", response_model=PortfolioSummary)
 async def get_portfolio_summary(portfolio_id: int, db: AsyncSession = Depends(get_db)):
-    trades_res = await db.execute(select(Trade).where(Trade.portfolio_id == portfolio_id))
-    trades = trades_res.scalars().all()
-    total_amount = sum(t.amount for t in trades)
-    total_trades = len(trades)
-    tickers = set(t.ticker for t in trades)
+    result = await db.execute(
+        select(
+            func.count(Trade.id).label("total_trades"),
+            func.coalesce(func.sum(Trade.amount), 0).label("total_amount"),
+            func.array_agg(distinct(Trade.ticker)).label("tickers")
+        ).where(Trade.portfolio_id == portfolio_id)
+    )
+    row = result.one()
     return PortfolioSummary(
         portfolio_id=portfolio_id,
-        total_trades=total_trades,
-        total_amount=total_amount,
-        tickers=list(tickers)
+        total_trades=row.total_trades,
+        total_amount=row.total_amount,
+        tickers=row.tickers or []
     )
+
 
 @router.post("/portfolio/{portfolio_id}/trade", response_model=TradeOut)
 async def make_trade(portfolio_id: int, trade: TradeSummary, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
